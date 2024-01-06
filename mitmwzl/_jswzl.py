@@ -14,7 +14,7 @@ class JSWZL:
 		:param api_url: URL of the jswzl API server (default: http://localhost:37232)
 		:param max_response_size: Don't process responses with a body larger than this (default: 100 MiB)
 		"""
-		self._jswzl_api_client = AsyncClient(base_url=api_url)
+		self._jswzl_api_client = AsyncClient(base_url=api_url, timeout=60)
 		self.max_response_size = max_response_size
 
 	async def response(self, flow: HTTPFlow):
