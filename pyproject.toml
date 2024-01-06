@@ -1,0 +1,22 @@
+[project]
+name = "mitmwzl"
+version = "0.1.0"
+description = "A mitmproxy addon for jswzl"
+readme = "README.md"
+requires-python = ">=3.8"
+
+authors = [{ name = "Albert Pedersen", email = "mitmwzl@albertpedersen.com" }]
+
+classifiers = [
+	"License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+	"Operating System :: OS Independent",
+	"Programming Language :: Python :: 3",
+]
+
+[project.urls]
+Homepage = "https://github.com/AlbertSPedersen/mitmwzl"
+Issues = "https://github.com/AlbertSPedersen/mitmwzl/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
