@@ -13,6 +13,10 @@ classifiers = [
 	"Programming Language :: Python :: 3",
 ]
 
+dependencies = [
+	"mitmproxy>=10"
+]
+
 [project.urls]
 Homepage = "https://github.com/AlbertSPedersen/mitmwzl"
 Issues = "https://github.com/AlbertSPedersen/mitmwzl/issues"
