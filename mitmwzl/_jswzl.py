@@ -38,8 +38,7 @@ class JSWZL:
 		# TODO: Figure out how Burp parses "response.statedMimeType()"
 		mimetype = get_burp_mimetype(get_response_content_type(flow))
 
-		# jswzl probably does not handle other types
-		# TODO: Ask author which mimetypes jswzl accepts
+		# jswzl ignores mimetypes other than SCRIPT and HTML
 		if mimetype not in ['SCRIPT', 'HTML']:
 			return
 
