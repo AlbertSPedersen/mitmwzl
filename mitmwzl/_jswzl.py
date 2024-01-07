@@ -88,6 +88,9 @@ class JSWZL:
 
 			ctx.master.commands.call('replay.client', [chunk_flow])
 
+			# To prevent overwhelming the server with requests for JS chunks
+			await asyncio.sleep(0.5)
+
 	async def fetch_source_map(self, flow: HTTPFlow):
 		sourcemap_flow = flow.copy()
 
