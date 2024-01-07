@@ -1,5 +1,6 @@
 from datetime import datetime
 from httpx import AsyncClient
+import mitmproxy
 from mitmproxy.http import HTTPFlow
 from mitmproxy import ctx
 from ._constants import SOURCE_MAPPING_URL_PATTERN
@@ -115,8 +116,16 @@ class JSWZL:
 		ctx.master.commands.call('replay.client', [sourcemap_flow])
 
 		# TODO: Figure out how to properly wait for the response to be ready
-		while not ((sourcemap_flow.response and sourcemap_flow.response.text) or sourcemap_flow.error):
+		for _ in range(10):
 			await asyncio.sleep(1)
+			if sourcemap_flow.error:
+				ctx.log(f'Failed to fetch sourcemap {sourcemap_flow.request.url}: {sourcemap_flow.error}')
+				return
+			if (sourcemap_flow.response is not None and sourcemap_flow.response.raw_content is not None):
+				break
+		else:
+			ctx.log(f'Gave up fetching sourcemap {sourcemap_flow.request.url} after 10 seconds', 'WARN')
+			return
 
 		if sourcemap_flow.response.status_code == 200:
 			try:
