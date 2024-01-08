@@ -17,6 +17,7 @@ class JSWZL:
 		"""
 		self._jswzl_api_client = AsyncClient(base_url=api_url, timeout=60)
 		self.max_response_size = max_response_size
+		self.processed_urls = set()
 
 	async def response(self, flow: HTTPFlow):
 		# Create background task to avoid blocking the response
@@ -82,6 +83,13 @@ class JSWZL:
 
 			chunk_flow.request.path_components = [*flow.request.path_components[:-1], chunk]
 
+			# Ignore already fetched chunks, if jswzl requests them again
+			if chunk_flow.request.url in self.processed_urls:
+				ctx.log(f'Ignoring already fetched chunk: {chunk_flow.request.url}', 'WARN')
+				continue
+
+			self.processed_urls.add(chunk_flow.request.url)
+
 			# Make it show up in the request log
 			if 'view' in ctx.master.addons:
 				ctx.master.commands.call('view.flows.duplicate', [chunk_flow])
@@ -110,6 +118,13 @@ class JSWZL:
 			*flow.request.path_components[:-1],
 			source_mapping_url
 		)
+
+		# Don't fetch the same sourcemap twice
+		if sourcemap_flow.request.url in self.processed_urls:
+			ctx.log(f'Ignoring already fetched sourcemap: {sourcemap_flow.request.url}', 'WARN')
+			return
+
+		self.processed_urls.add(sourcemap_flow.request.url)
 
 		# For the UI to display the request
 		if 'view' in ctx.master.addons:
