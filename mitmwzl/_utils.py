@@ -1,5 +1,5 @@
 from email.message import Message
-from mitmproxy.http import HTTPFlow, Headers
+from mitmproxy.http import HTTPFlow, Headers, Request
 from mimetypes import guess_type
 
 
@@ -26,3 +26,8 @@ def parse_content_type(content_type: str) -> str:
 
 def to_burp_header_list(headers: Headers):
 	return [f'{k}: {v}' for k, v in headers.items()]
+
+def get_last_path_component(request: Request) -> str:
+	if request.path.split('?')[0].endswith('/'):
+		return ''
+	return request.path_components[-1]

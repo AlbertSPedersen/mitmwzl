@@ -1,12 +1,12 @@
 from datetime import datetime
 from httpx import AsyncClient
-import mitmproxy
 from mitmproxy.http import HTTPFlow
 from mitmproxy import ctx
-from ._constants import SOURCE_MAPPING_URL_PATTERN
+from ._constants import SOURCE_MAPPING_URL_PATTERN, SKIP_URL_PATTERN
 from ._utils import get_response_content_type, get_burp_mimetype, to_burp_header_list
 import asyncio
 import json
+import logging
 
 
 class JSWZL:
@@ -17,11 +17,38 @@ class JSWZL:
 		"""
 		self._jswzl_api_client = AsyncClient(base_url=api_url, timeout=60)
 		self.max_response_size = max_response_size
-		self.processed_urls = set()
+		self._processed_urls = set()
+
+	"""
+	Other addons might be rewriting URL or headers. We need to
+	preserve the original values so they can be sent to jswzl.
+	"""
+	async def requestheaders(self, flow: HTTPFlow):
+		if SKIP_URL_PATTERN.match(flow.request.path):
+			flow.metadata['jswzl_skip'] = True
+			return
+
+		flow._original_request = flow.request.copy()
+
+	async def request(self, flow: HTTPFlow):
+		if flow.metadata.get('jswzl_skip') is True:
+			return
+
+		flow._original_request.raw_content = flow.request.raw_content
 
 	async def response(self, flow: HTTPFlow):
+		if flow.metadata.get('jswzl_skip') is True:
+			return
+
+		if hasattr(flow, '_jswzl_sourcemap_future'):
+			flow._jswzl_sourcemap_future.set_result(flow.response)
+
 		# Create background task to avoid blocking the response
 		asyncio.create_task(self.send_to_jswzl(flow))
+
+	async def error(self, flow: HTTPFlow):
+		if hasattr(flow, '_jswzl_sourcemap_future'):
+			flow._jswzl_sourcemap_future.set_exception(flow.error)
 
 	async def send_to_jswzl(self, flow: HTTPFlow):
 		# Let's not recurse
@@ -33,7 +60,7 @@ class JSWZL:
 			return
 
 		# Probably not fetching assets
-		if flow.request.method != 'GET':
+		if flow._original_request.method != 'GET':
 			return
 
 		# TODO: Figure out how Burp parses "response.statedMimeType()"
@@ -47,11 +74,11 @@ class JSWZL:
 
 		data = {
 			'request': {
-				'method': flow.request.method,
-				'url': flow.request.url,
+				'method': flow._original_request.method,
+				'url': flow._original_request.url,
 				# API does not parse the source map if host header is missing, and
 				# there is no host header in HTTP/2 and HTTP/3
-				'headers': to_burp_header_list(flow.request.headers) + [f'host: {flow.request.host_header}']
+				'headers': to_burp_header_list(flow._original_request.headers) + [f'host: {flow._original_request.host_header}']
 			},
 			'response': {
 				'status': flow.response.status_code,
@@ -72,23 +99,29 @@ class JSWZL:
 
 		chunk_files = resp.json()
 
+		await self.fetch_js_chunks(flow, chunk_files)
+
+		# The original request is no longer needed
+		del flow._original_request
+
+	async def fetch_js_chunks(self, flow: HTTPFlow, chunk_files: list[str]):
 		for chunk in chunk_files:
 			chunk_flow = flow.copy()
+
+			chunk_flow.request = flow._original_request.copy()
 
 			# I'm not sure why jswzl sometimes produces incorrect relative
 			# paths like "static/chunks/517.78c3745e2c1177e4.js", when the
 			# correct relative path is just the last component
 			# TODO: Figure out if it's my addon or jswzl doing funny business
-			chunk = chunk.split('/')[-1]
-
-			chunk_flow.request.path_components = [*flow.request.path_components[:-1], chunk]
+			chunk_flow.request.path_components = [*chunk_flow.request.path_components[:-1], chunk.split('/')[-1]]
 
 			# Ignore already fetched chunks, if jswzl requests them again
-			if chunk_flow.request.url in self.processed_urls:
+			if chunk_flow.request.url in self._processed_urls:
 				ctx.log(f'Ignoring already fetched chunk: {chunk_flow.request.url}', 'WARN')
 				continue
 
-			self.processed_urls.add(chunk_flow.request.url)
+			self._processed_urls.add(chunk_flow.request.url)
 
 			# Make it show up in the request log
 			if 'view' in ctx.master.addons:
@@ -96,11 +129,10 @@ class JSWZL:
 
 			ctx.master.commands.call('replay.client', [chunk_flow])
 
-			# To prevent overwhelming the server with requests for JS chunks
-			await asyncio.sleep(0.5)
-
 	async def fetch_source_map(self, flow: HTTPFlow):
 		sourcemap_flow = flow.copy()
+
+		sourcemap_flow.request = flow._original_request.copy()
 
 		sourcemap_flow.metadata['jswzl_sourcemap_subrequest'] = True
 
@@ -120,11 +152,18 @@ class JSWZL:
 		)
 
 		# Don't fetch the same sourcemap twice
-		if sourcemap_flow.request.url in self.processed_urls:
+		if sourcemap_flow.request.url in self._processed_urls:
 			ctx.log(f'Ignoring already fetched sourcemap: {sourcemap_flow.request.url}', 'WARN')
 			return
 
-		self.processed_urls.add(sourcemap_flow.request.url)
+		self._processed_urls.add(sourcemap_flow.request.url)
+
+		loop = asyncio.get_event_loop()
+		future = loop.create_future()
+
+		# Can't use flow.metadata because mitmproxy attempts to pickle
+		# but futures cannot be pickled
+		sourcemap_flow._jswzl_sourcemap_future = future
 
 		# For the UI to display the request
 		if 'view' in ctx.master.addons:
@@ -132,24 +171,18 @@ class JSWZL:
 
 		ctx.master.commands.call('replay.client', [sourcemap_flow])
 
-		# TODO: Figure out how to properly wait for the response to be ready
-		for _ in range(10):
-			await asyncio.sleep(1)
-			if sourcemap_flow.error:
-				ctx.log(f'Failed to fetch sourcemap {sourcemap_flow.request.url}: {sourcemap_flow.error}')
-				return
-			if (sourcemap_flow.response is not None and sourcemap_flow.response.raw_content is not None):
-				break
-		else:
-			ctx.log(f'Gave up fetching sourcemap {sourcemap_flow.request.url} after 10 seconds', 'WARN')
-			return
+		try:
+			# Timeout of 10 second
+			response = await asyncio.wait_for(future, 10)
+		except:
+			sourcemap_flow.kill()
 
-		if sourcemap_flow.response.status_code == 200:
+		if response.status_code == 200:
 			try:
 				# Sourcemaps are valid JSON objects. If this fails,
 				# the response is not a valid sourcemap. This can
 				# happen if the website is an SPA
-				json.loads(sourcemap_flow.response.text)
-				return sourcemap_flow.response.text
+				json.loads(response.text)
+				return response.text
 			except:
 				pass
